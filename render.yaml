@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: zoning-mcp-server
+    env: docker
+    plan: starter
+    region: oregon
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3030
+      - key: ALLOW_NO_AUTH
+        value: "1"
+      - key: OPENAI_API_KEY
+        sync: false
+    healthCheckPath: /health
+    numInstances: 1
