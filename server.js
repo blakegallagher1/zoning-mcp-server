@@ -264,7 +264,7 @@ app.post('/mcp', authenticate, async (req, res) => {
               console.log('Error:', errorText);
             }
             
-            // Fallback: try inline vector_store_ids shape
+              // Fallback: try inline vector_store_ids shape
             if (errorText.includes('Unknown parameter: \'attachments\'')) {
               console.log('Retrying with fallback payload shape...');
               const fallbackPayload = {
