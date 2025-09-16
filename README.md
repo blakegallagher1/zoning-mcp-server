@@ -28,9 +28,14 @@ docker run -p 3030:3030 -e OPENAI_API_KEY=your_key zoning-mcp-server
 ```
 
 ### Render Deployment
-1. Connect GitHub repo to Render
-2. Set environment variable: OPENAI_API_KEY
-3. Deploy automatically via render.yaml
+1. In the Render dashboard select **New > Blueprint Deploy** and point it at this repository. Render will read `render.yaml` and create the Docker-based web service.
+2. In the Render UI, set the following environment variables before the first deploy:
+   - `OPENAI_API_KEY` – required; the key must have access to the Responses + File Search APIs.
+   - (Optional) `MCP_AUTH_TOKEN` – set a Bearer token if you want to keep authentication enabled.
+   - (Optional) `ALLOW_NO_AUTH=1` – keep this if you want unauthenticated access from ChatGPT. Remove it when using a custom token.
+3. Click **Deploy**. Render will build the Docker image and start the service, binding to the port supplied in the `PORT` env var (managed automatically by Render).
+4. After it goes live, verify the deployment with `curl https://<your-render-domain>/health` – it should return `{ "ok": true }`.
+5. Use the public URL `https://<your-render-domain>/sse` as the MCP endpoint inside ChatGPT. Supply the `MCP_AUTH_TOKEN` you configured if auth is enabled.
 
 ## API Endpoints
 
@@ -49,6 +54,7 @@ Authentication: No authentication (ALLOW_NO_AUTH=1)
 
 - `OPENAI_API_KEY` - Required: Your OpenAI API key
 - `PORT` - Server port (default: 3030)
+- `HOST` - Interface to bind (default: 0.0.0.0; use 127.0.0.1 for local testing if needed)
 - `ALLOW_NO_AUTH` - Disable authentication (default: false)
 - `DEBUG_MCP` - Enable debug logging (default: false)
 - `MCP_AUTH_TOKEN` - Bearer token for auth (default: mcp-zoning-token)

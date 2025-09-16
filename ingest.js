@@ -1,7 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const fetch = require('node-fetch');
-const FormData = require('form-data');
 require('dotenv').config();
 
 const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://localhost:3030';
@@ -15,7 +13,7 @@ async function ingestPDFs() {
       return;
     }
 
-    const files = fs.readdirSync(ZONING_CODES_DIR)
+    const files = (await fs.promises.readdir(ZONING_CODES_DIR))
       .filter(file => file.toLowerCase().endsWith('.pdf'));
 
     console.log(`Found ${files.length} PDF files to ingest`);
@@ -24,8 +22,9 @@ async function ingestPDFs() {
       const filePath = path.join(ZONING_CODES_DIR, file);
       console.log(`Ingesting: ${file}`);
 
+      const fileBuffer = await fs.promises.readFile(filePath);
       const formData = new FormData();
-      formData.append('file', fs.createReadStream(filePath));
+      formData.append('file', new Blob([fileBuffer], { type: 'application/pdf' }), file);
 
       const response = await fetch(`${MCP_SERVER_URL}/ingest`, {
         method: 'POST',

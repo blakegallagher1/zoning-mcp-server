@@ -3,8 +3,6 @@ const multer = require('multer');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const fs = require('fs');
-const path = require('path');
-const fetch = require('node-fetch');
 require('dotenv').config();
 
 const app = express();
@@ -14,6 +12,14 @@ const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN || 'mcp-zoning-token';
 const ALLOW_NO_AUTH = process.env.ALLOW_NO_AUTH === '1' || process.env.ALLOW_NO_AUTH === 'true';
 const DEBUG_MCP = process.env.DEBUG_MCP === '1' || process.env.DEBUG_MCP === 'true';
 const VECTOR_STORE_NAME = process.env.VECTOR_STORE_NAME || 'zoning-codes-store';
+const HOST = process.env.HOST || '0.0.0.0';
+const JSONRPC_VERSION = '2.0';
+const PROTOCOL_VERSION = { major: 0, minor: 1 };
+const SERVER_METADATA = {
+  name: 'Zoning MCP Server',
+  version: '1.0.0',
+  description: 'Semantic search interface for zoning code PDFs'
+};
 
 // Middleware
 app.use(cors());
@@ -118,11 +124,63 @@ app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
 
+function jsonRpcError(res, id, code, message, data) {
+  const errorPayload = {
+    jsonrpc: JSONRPC_VERSION,
+    id: id ?? null,
+    error: { code, message }
+  };
+
+  if (data !== undefined) {
+    errorPayload.error.data = data;
+  }
+
+  res.json(errorPayload);
+}
+
+function jsonRpcResult(res, id, result) {
+  res.json({
+    jsonrpc: JSONRPC_VERSION,
+    id: id ?? null,
+    result
+  });
+}
+
+function extractOutputText(responseBody) {
+  if (!responseBody) {
+    return '';
+  }
+
+  if (typeof responseBody.output_text === 'string' && responseBody.output_text.trim()) {
+    return responseBody.output_text;
+  }
+
+  if (Array.isArray(responseBody.output)) {
+    const textChunks = [];
+    for (const item of responseBody.output) {
+      if (item && Array.isArray(item.content)) {
+        for (const part of item.content) {
+          if (part && typeof part.text === 'string') {
+            textChunks.push(part.text);
+          }
+        }
+      }
+    }
+    return textChunks.join('\n').trim();
+  }
+
+  return '';
+}
+
 // File ingestion endpoint
 app.post('/ingest', authenticate, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    if (!OPENAI_API_KEY) {
+      return res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
     }
 
     const file = req.file;
@@ -186,13 +244,49 @@ app.post('/ingest', authenticate, upload.single('file'), async (req, res) => {
   }
 });
 
-// MCP endpoint for tools/list
+// MCP endpoint for JSON-RPC requests
 app.post('/mcp', authenticate, async (req, res) => {
+  const body = req.body || {};
+  const { jsonrpc, method, params = {}, id = null } = body;
+
+  if (jsonrpc && jsonrpc !== JSONRPC_VERSION) {
+    return jsonRpcError(res, id, -32600, 'Invalid JSON-RPC version');
+  }
+
+  if (!method) {
+    return jsonRpcError(res, id, -32600, 'Invalid request: missing method');
+  }
+
   try {
-    const { method, params } = req.body;
+    if (method === 'initialize') {
+      return jsonRpcResult(res, id, {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: {
+          tools: {
+            listChanged: false
+          }
+        },
+        serverInfo: SERVER_METADATA
+      });
+    }
+
+    if (method === 'server/info') {
+      return jsonRpcResult(res, id, {
+        ...SERVER_METADATA,
+        capabilities: {
+          tools: {
+            listChanged: false
+          }
+        }
+      });
+    }
+
+    if (method === 'ping') {
+      return jsonRpcResult(res, id, { ok: true });
+    }
 
     if (method === 'tools/list') {
-      res.json({
+      return jsonRpcResult(res, id, {
         tools: [
           {
             name: 'search_zoning',
@@ -208,134 +302,145 @@ app.post('/mcp', authenticate, async (req, res) => {
               required: ['query']
             }
           }
-        ]
+        ],
+        next_cursor: null
       });
-    } else if (method === 'tools/call') {
-      const { name, arguments: args } = params;
-      
-      if (name === 'search_zoning') {
-        const vectorStore = await getOrCreateVectorStore();
-        const query = args.query;
+    }
 
-        if (DEBUG_MCP) {
-          console.log('=== MCP Search Request ===');
-          console.log('Query:', query);
-          console.log('Vector Store ID:', vectorStore.id);
-        }
+    if (method === 'tools/call') {
+      if (!OPENAI_API_KEY) {
+        return jsonRpcError(res, id, -32001, 'OPENAI_API_KEY is not configured');
+      }
 
-        // Primary payload using tool_resources (stable shape)
-        const payload = {
-          model: 'gpt-4o-mini',
-          input: `Search the zoning documents for: ${query}. Provide specific citations with document names, section references, and relevant text snippets.`,
-          tools: [{ type: 'file_search' }],
-          tool_resources: {
-            file_search: {
-              vector_store_ids: [vectorStore.id]
-            }
+      const { name, arguments: args = {} } = params;
+
+      if (name !== 'search_zoning') {
+        return jsonRpcError(res, id, -32601, `Unknown tool: ${name}`);
+      }
+
+      const query = args.query;
+
+      if (!query || typeof query !== 'string') {
+        return jsonRpcError(res, id, -32602, 'Missing required argument: query');
+      }
+
+      const vectorStore = await getOrCreateVectorStore();
+
+      if (DEBUG_MCP) {
+        console.log('=== MCP Search Request ===');
+        console.log('Query:', query);
+        console.log('Vector Store ID:', vectorStore.id);
+      }
+
+      const payload = {
+        model: 'gpt-4o-mini',
+        input: `Search the zoning documents for: ${query}. Provide specific citations with document names, section references, and relevant text snippets.`,
+        tools: [{ type: 'file_search' }],
+        tool_resources: {
+          file_search: {
+            vector_store_ids: [vectorStore.id]
           }
-        };
+        }
+      };
+
+      if (DEBUG_MCP) {
+        console.log('=== OpenAI Responses API Payload ===');
+        console.log(JSON.stringify(payload, null, 2));
+      }
+
+      const response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+          'OpenAI-Beta': 'assistants=v2'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const requestId = response.headers.get('x-request-id');
+      if (DEBUG_MCP && requestId) {
+        console.log('OpenAI Request ID:', requestId);
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
 
         if (DEBUG_MCP) {
-          console.log('=== OpenAI Responses API Payload ===');
-          console.log(JSON.stringify(payload, null, 2));
+          console.log('=== OpenAI API Error ===');
+          console.log('Status:', response.status);
+          console.log('Error:', errorText);
         }
 
-        try {
-          const response = await fetch('https://api.openai.com/v1/responses', {
+        if (errorText.includes("Unknown parameter: 'attachments'")) {
+          if (DEBUG_MCP) {
+            console.log('Retrying with fallback payload shape...');
+          }
+
+          const fallbackPayload = {
+            model: 'gpt-4o-mini',
+            input: `Search the zoning documents for: ${query}. Provide specific citations with document names, section references, and relevant text snippets.`,
+            tools: [{
+              type: 'file_search',
+              vector_store_ids: [vectorStore.id]
+            }]
+          };
+
+          const fallbackResponse = await fetch('https://api.openai.com/v1/responses', {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${OPENAI_API_KEY}`,
               'Content-Type': 'application/json',
               'OpenAI-Beta': 'assistants=v2'
             },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(fallbackPayload)
           });
 
-          const requestId = response.headers.get('x-request-id');
-          if (DEBUG_MCP && requestId) {
-            console.log('OpenAI Request ID:', requestId);
+          if (!fallbackResponse.ok) {
+            throw new Error(`Fallback request failed: ${fallbackResponse.status}`);
           }
 
-          if (!response.ok) {
-            const errorText = await response.text();
-            if (DEBUG_MCP) {
-              console.log('=== OpenAI API Error ===');
-              console.log('Status:', response.status);
-              console.log('Error:', errorText);
-            }
-            
-              // Fallback: try inline vector_store_ids shape
-            if (errorText.includes('Unknown parameter: \'attachments\'')) {
-              console.log('Retrying with fallback payload shape...');
-              const fallbackPayload = {
-                model: 'gpt-4o-mini',
-                input: `Search the zoning documents for: ${query}. Provide specific citations with document names, section references, and relevant text snippets.`,
-                tools: [{ 
-                  type: 'file_search',
-                  vector_store_ids: [vectorStore.id]
-                }]
-              };
+          const fallbackResult = await fallbackResponse.json();
+          const fallbackText = extractOutputText(fallbackResult);
+          const parsedFallback = parseSearchResults(fallbackText || '');
 
-              const fallbackResponse = await fetch('https://api.openai.com/v1/responses', {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${OPENAI_API_KEY}`,
-                  'Content-Type': 'application/json',
-                  'OpenAI-Beta': 'assistants=v2'
-                },
-                body: JSON.stringify(fallbackPayload)
-              });
-
-              if (!fallbackResponse.ok) {
-                throw new Error(`Fallback request failed: ${fallbackResponse.status}`);
-              }
-
-              const fallbackResult = await fallbackResponse.json();
-              return res.json({
-                content: [
-                  {
-                    type: 'text',
-                    text: parseSearchResults(fallbackResult.output)
-                  }
-                ]
-              });
-            }
-            
-            throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
-          }
-
-          const result = await response.json();
-          
-          if (DEBUG_MCP) {
-            console.log('=== OpenAI Response ===');
-            console.log(JSON.stringify(result, null, 2));
-          }
-
-          // Parse and structure the response
-          const structuredResults = parseSearchResults(result.output);
-
-          res.json({
+          return jsonRpcResult(res, id, {
             content: [
               {
                 type: 'text',
-                text: structuredResults
+                text: parsedFallback
               }
             ]
           });
-
-        } catch (searchError) {
-          console.error('Search error:', searchError);
-          res.status(500).json({ error: searchError.message });
         }
-      } else {
-        res.status(400).json({ error: `Unknown tool: ${name}` });
+
+        throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
       }
-    } else {
-      res.status(400).json({ error: `Unknown method: ${method}` });
+
+      const result = await response.json();
+
+      if (DEBUG_MCP) {
+        console.log('=== OpenAI Response ===');
+        console.log(JSON.stringify(result, null, 2));
+      }
+
+      const outputText = extractOutputText(result);
+      const structuredResults = parseSearchResults(outputText || '');
+
+      return jsonRpcResult(res, id, {
+        content: [
+          {
+            type: 'text',
+            text: structuredResults
+          }
+        ]
+      });
     }
+
+    return jsonRpcError(res, id, -32601, `Unknown method: ${method}`);
   } catch (error) {
     console.error('MCP error:', error);
-    res.status(500).json({ error: error.message });
+    return jsonRpcError(res, id, -32000, error.message || 'Server error');
   }
 });
 
@@ -432,8 +537,8 @@ function extractFilename(text) {
 }
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`MCP Server running on port ${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`MCP Server running on http://${HOST}:${PORT}`);
   console.log(`Authentication: ${ALLOW_NO_AUTH ? 'DISABLED' : 'ENABLED'}`);
   console.log(`Debug mode: ${DEBUG_MCP ? 'ENABLED' : 'DISABLED'}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
