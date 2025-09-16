@@ -183,6 +183,15 @@ function extractOutputText(responseBody) {
   return '';
 }
 
+function parseProtocolString(value) {
+  const segments = String(value).split('-');
+  const parts = segments[0].split('.').map(Number).filter(n => !Number.isNaN(n));
+  return {
+    major: parts[0] ?? PROTOCOL_VERSION.major,
+    minor: parts[1] ?? 0
+  };
+}
+
 // File ingestion endpoint
 app.post('/ingest', authenticate, upload.single('file'), async (req, res) => {
   try {
@@ -278,6 +287,26 @@ app.post('/mcp', authenticate, async (req, res) => {
 
   try {
     if (method === 'initialize') {
+      const requestedVersion = params.protocolVersion;
+
+      if (DEBUG_MCP) {
+        console.log('Requested protocol version:', requestedVersion);
+      }
+
+      if (requestedVersion) {
+        const { major } = PROTOCOL_VERSION;
+
+        const actualVersion = typeof requestedVersion === 'string'
+          ? parseProtocolString(requestedVersion)
+          : { major: requestedVersion.major, minor: requestedVersion.minor ?? 0 };
+
+        if (actualVersion.major !== major) {
+          return jsonRpcError(res, id, -32602, 'Unsupported protocol version', {
+            supported: PROTOCOL_VERSION
+          });
+        }
+      }
+
       return jsonRpcResult(res, id, {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: {
@@ -285,7 +314,10 @@ app.post('/mcp', authenticate, async (req, res) => {
             listChanged: false
           }
         },
-        serverInfo: SERVER_METADATA
+        serverInfo: {
+          ...SERVER_METADATA,
+          protocolVersion: PROTOCOL_VERSION
+        }
       });
     }
 
