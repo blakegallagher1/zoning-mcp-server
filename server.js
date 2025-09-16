@@ -28,7 +28,11 @@ app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
 if (DEBUG_MCP) {
   app.use((req, res, next) => {
+    const start = Date.now();
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+    res.on('finish', () => {
+      console.log(` ↳ Responded ${res.statusCode} in ${Date.now() - start}ms`);
+    });
     next();
   });
 }
@@ -255,6 +259,14 @@ app.post('/ingest', authenticate, upload.single('file'), async (req, res) => {
 app.post('/mcp', authenticate, async (req, res) => {
   const body = req.body || {};
   const { jsonrpc, method, params = {}, id = null } = body;
+
+  if (DEBUG_MCP) {
+    try {
+      console.log('MCP request body:', JSON.stringify(body));
+    } catch (e) {
+      console.log('MCP request body (unserializable)');
+    }
+  }
 
   if (jsonrpc && jsonrpc !== JSONRPC_VERSION) {
     return jsonRpcError(res, id, -32600, 'Invalid JSON-RPC version');
