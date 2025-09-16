@@ -1,0 +1,25 @@
+{
+  "id": "vs_68c90d131e4c81919020c08806d3269a",
+  "object": "vector_store",
+  "created_at": 1758006547,
+  "name": "zoning-codes-store-text",
+  "description": null,
+  "usage_bytes": 0,
+  "file_counts": {
+    "in_progress": 0,
+    "completed": 0,
+    "failed": 0,
+    "cancelled": 0,
+    "total": 0
+  },
+  "status": "completed",
+  "expires_after": {
+    "anchor": "last_active_at",
+    "days": 30
+  },
+  "expires_at": 1760598547,
+  "last_active_at": 1758006547,
+  "metadata": {},
+  "source": "text_converted",
+  "original_vector_store": "vs_68c90bab0e3c81918093f7b015bf7ba0"
+}
