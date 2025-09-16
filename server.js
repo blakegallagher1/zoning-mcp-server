@@ -192,13 +192,19 @@ function extractOutputText(responseBody) {
   return '';
 }
 
-function parseProtocolString(value) {
-  const segments = String(value).split('-');
-  const parts = segments[0].split('.').map(Number).filter(n => !Number.isNaN(n));
-  return {
-    major: parts[0] ?? PROTOCOL_VERSION.major,
-    minor: parts[1] ?? 0
-  };
+function normalizeProtocolVersion(value) {
+  if (!value) {
+    return PROTOCOL_VERSION;
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  const major = typeof value.major === 'number' ? value.major : PROTOCOL_VERSION.major;
+  const minor = typeof value.minor === 'number' ? value.minor : PROTOCOL_VERSION.minor;
+
+  return { major, minor };
 }
 
 // File ingestion endpoint
@@ -302,22 +308,10 @@ app.post('/mcp', authenticate, async (req, res) => {
         console.log('Requested protocol version:', requestedVersion);
       }
 
-      if (requestedVersion) {
-        const { major } = PROTOCOL_VERSION;
-
-        const actualVersion = typeof requestedVersion === 'string'
-          ? parseProtocolString(requestedVersion)
-          : { major: requestedVersion.major, minor: requestedVersion.minor ?? 0 };
-
-        if (actualVersion.major !== major) {
-          return jsonRpcError(res, id, -32602, 'Unsupported protocol version', {
-            supported: PROTOCOL_VERSION
-          });
-        }
-      }
+      const negotiatedVersion = normalizeProtocolVersion(requestedVersion);
 
       return jsonRpcResult(res, id, {
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: negotiatedVersion,
         capabilities: {
           tools: {
             listChanged: false
@@ -325,7 +319,7 @@ app.post('/mcp', authenticate, async (req, res) => {
         },
         serverInfo: {
           ...SERVER_METADATA,
-          protocolVersion: PROTOCOL_VERSION
+          protocolVersion: negotiatedVersion
         }
       });
     }
