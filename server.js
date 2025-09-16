@@ -388,7 +388,7 @@ app.post('/mcp', authenticate, async (req, res) => {
 
       const requestBody = {
         model: 'gpt-4.1-mini',
-        instructions: `Search the zoning documents for: ${query}. Provide specific citations with document names, section references, and relevant text snippets.`,
+        input: `Search the zoning documents for: ${query}. Provide specific citations with document names, section references, and relevant text snippets.`,
         tools: [
           {
             type: 'file_search',
