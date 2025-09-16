@@ -162,22 +162,31 @@ function extractOutputText(responseBody) {
     return '';
   }
 
+  if (typeof responseBody.output === 'string' && responseBody.output.trim()) {
+    return responseBody.output;
+  }
+
   if (typeof responseBody.output_text === 'string' && responseBody.output_text.trim()) {
     return responseBody.output_text;
   }
 
   if (Array.isArray(responseBody.output)) {
-    const textChunks = [];
-    for (const item of responseBody.output) {
-      if (item && Array.isArray(item.content)) {
-        for (const part of item.content) {
-          if (part && typeof part.text === 'string') {
-            textChunks.push(part.text);
-          }
+    return responseBody.output
+      .map(item => {
+        if (typeof item === 'string') {
+          return item;
         }
-      }
-    }
-    return textChunks.join('\n').trim();
+        if (item && Array.isArray(item.content)) {
+          return item.content
+            .filter(part => typeof part === 'string' || (part && typeof part.text === 'string'))
+            .map(part => (typeof part === 'string' ? part : part.text))
+            .join('\n');
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim();
   }
 
   return '';
@@ -383,30 +392,29 @@ app.post('/mcp', authenticate, async (req, res) => {
         console.log('Vector Store ID:', vectorStore.id);
       }
 
-      const payload = {
-        model: 'gpt-4o-mini',
-        input: `Search the zoning documents for: ${query}. Provide specific citations with document names, section references, and relevant text snippets.`,
-        tools: [{ type: 'file_search' }],
-        tool_resources: {
-          file_search: {
+      const requestBody = {
+        model: 'gpt-4.1-mini',
+        instructions: `Search the zoning documents for: ${query}. Provide specific citations with document names, section references, and relevant text snippets.`,
+        tools: [
+          {
+            type: 'file_search',
             vector_store_ids: [vectorStore.id]
           }
-        }
+        ]
       };
 
       if (DEBUG_MCP) {
         console.log('=== OpenAI Responses API Payload ===');
-        console.log(JSON.stringify(payload, null, 2));
+        console.log(JSON.stringify(requestBody, null, 2));
       }
 
       const response = await fetch('https://api.openai.com/v1/responses', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${OPENAI_API_KEY}`,
-          'Content-Type': 'application/json',
-          'OpenAI-Beta': 'assistants=v2'
+          'Content-Type': 'application/json'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(requestBody)
       });
 
       const requestId = response.headers.get('x-request-id');
