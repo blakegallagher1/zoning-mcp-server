@@ -26,6 +26,13 @@ app.use(cors());
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
+if (DEBUG_MCP) {
+  app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+    next();
+  });
+}
+
 // Authentication middleware
 const authenticate = (req, res, next) => {
   if (ALLOW_NO_AUTH) {
