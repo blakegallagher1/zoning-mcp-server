@@ -535,7 +535,7 @@ function parseSearchResults(rawOutput) {
     
     for (const line of lines) {
       // Look for document/filename references
-      if (line.includes('.pdf') || line.includes('Document:') || line.includes('Source:')) {
+      if (line.match(/\.(pdf|txt)/i) || line.includes('Document:') || line.includes('Source:')) {
         if (currentCitation.filename) {
           citations.push(currentCitation);
         }
@@ -580,8 +580,8 @@ function parseSearchResults(rawOutput) {
 
 function extractFilename(text) {
   // Extract filename from various formats
-  const pdfMatch = text.match(/([^\/\\]+\.pdf)/i);
-  if (pdfMatch) return pdfMatch[1];
+  const fileMatch = text.match(/([^\/\\]+\.(pdf|txt))/i);
+  if (fileMatch) return fileMatch[1];
   
   const sourceMatch = text.match(/(?:Source|Document):\s*(.+)/i);
   if (sourceMatch) return sourceMatch[1].trim();
